@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -34,3 +37,12 @@ jobs:
         with:
           name: Island-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publish ke Releases (biar gampang download dari HP)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk Island.apk
+          gh release create "build-${{ github.run_number }}" Island.apk \
+            --title "Island APK build ${{ github.run_number }}" \
+            --notes "Download Island.apk, lalu install di HP."
