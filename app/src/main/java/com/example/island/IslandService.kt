@@ -6,26 +6,18 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.CountDownTimer
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
-import android.text.TextUtils
-import android.transition.AutoTransition
-import android.transition.TransitionManager
-import android.util.TypedValue
 import android.view.Gravity
-import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.TextView
 
 class IslandService : Service() {
 
@@ -49,15 +41,14 @@ class IslandService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var wm: WindowManager
-    private lateinit var root: FrameLayout
-    private lateinit var pill: LinearLayout
-    private lateinit var leftIcon: ImageView
-    private lateinit var rightIcon: ImageView
-    private lateinit var line1: TextView
-    private lateinit var line2: TextView
-
+    private lateinit var island: IslandView
     private var ready = false
-    private var lastKind = ""
+
+    private val prefs: SharedPreferences by lazy { getSharedPreferences("island", MODE_PRIVATE) }
+    private val prefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        if (ready) applyCalibration()
+    }
+    private val iconCache = HashMap<String, Drawable?>()
 
     // State
     private var recSec: Int? = null
@@ -65,6 +56,8 @@ class IslandService : Service() {
     private var timer: CountDownTimer? = null
     private var musicPkg: String? = null
     private var musicText: String? = null
+
+    private val orange = Color.parseColor("#FF9500")
 
     private val recTick = object : Runnable {
         override fun run() {
@@ -85,19 +78,30 @@ class IslandService : Service() {
         }
 
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        buildView()
+        island = IslandView(this)
 
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            (resources.displayMetrics.density * 170).toInt(),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP }
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            if (Build.VERSION.SDK_INT >= 30) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            } else if (Build.VERSION.SDK_INT >= 28) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
 
-        wm.addView(root, lp)
+        wm.addView(island, lp)
+        prefs.registerOnSharedPreferenceChangeListener(prefListener)
+        applyCalibration()
         ready = true
         render()
     }
@@ -135,6 +139,14 @@ class IslandService : Service() {
         render()
     }
 
+    private fun applyCalibration() {
+        island.setCalibration(
+            prefs.getInt("ox", 0).toFloat(),
+            prefs.getInt("oy", 0).toFloat(),
+            prefs.getInt("ex", 0).toFloat()
+        )
+    }
+
     private fun startTimer(seconds: Int) {
         timer?.cancel()
         timerLeft = seconds
@@ -156,117 +168,48 @@ class IslandService : Service() {
         }.start()
     }
 
+    private fun icon(pkg: String?): Drawable? {
+        if (pkg == null) return null
+        return iconCache.getOrPut(pkg) {
+            try {
+                packageManager.getApplicationIcon(pkg)
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
     private fun render() {
         val rec = recSec
         val tmr = timerLeft
         // Prioritas: Record > Timer > Musik
-        val kind = when {
-            rec != null -> "rec"
-            tmr != null -> "timer"
-            musicText != null -> "music"
-            else -> "idle"
+        val model = when {
+            rec != null -> IslandModel(
+                Kind.REC,
+                rowText = "Record detik ke-$rec •",
+                color = Color.RED
+            )
+            tmr != null -> IslandModel(
+                Kind.TIMER,
+                leftText = "Timer",
+                timerIcon = true,
+                rowText = when {
+                    tmr == 0 -> "Selesai"
+                    tmr < 60 -> "$tmr dtk"
+                    else -> "%02d:%02d".format(tmr / 60, tmr % 60)
+                },
+                color = orange
+            )
+            musicText != null -> IslandModel(
+                Kind.MUSIC,
+                leftIcon = icon(musicPkg),
+                eq = true,
+                rowText = musicText,
+                color = Color.WHITE
+            )
+            else -> IslandModel(Kind.IDLE)
         }
-        if (kind != lastKind) {
-            TransitionManager.beginDelayedTransition(root, AutoTransition().setDuration(250))
-            lastKind = kind
-        }
-
-        when (kind) {
-            "rec" -> {
-                pill.visibility = View.VISIBLE
-                leftIcon.visibility = View.GONE
-                rightIcon.visibility = View.GONE
-                line1.setTextColor(Color.RED)
-                line1.text = "Record detik ke-$rec •"
-                line2.visibility = View.GONE
-            }
-            "timer" -> {
-                pill.visibility = View.VISIBLE
-                leftIcon.visibility = View.GONE
-                rightIcon.visibility = View.VISIBLE
-                line1.setTextColor(ORANGE)
-                line1.text = "Timer"
-                line2.visibility = View.VISIBLE
-                line2.setTextColor(ORANGE)
-                val t = tmr ?: 0
-                line2.text = when {
-                    t == 0 -> "Selesai"
-                    t < 60 -> "$t dtk"
-                    else -> "%02d:%02d".format(t / 60, t % 60)
-                }
-            }
-            "music" -> {
-                pill.visibility = View.VISIBLE
-                leftIcon.visibility = View.VISIBLE
-                rightIcon.visibility = View.GONE
-                leftIcon.setImageDrawable(
-                    try { packageManager.getApplicationIcon(musicPkg!!) } catch (e: Exception) { null }
-                )
-                line1.setTextColor(Color.WHITE)
-                line1.text = musicText
-                line2.visibility = View.GONE
-            }
-            else -> pill.visibility = View.GONE
-        }
-    }
-
-    private val ORANGE = Color.parseColor("#FF9500")
-
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-
-    private fun buildView() {
-        root = FrameLayout(this)
-
-        pill = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(8), dp(16), dp(8))
-            minimumHeight = dp(36)
-            background = GradientDrawable().apply {
-                setColor(Color.BLACK)
-                cornerRadius = dp(40).toFloat()
-            }
-            visibility = View.GONE
-        }
-
-        leftIcon = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(10) }
-        }
-
-        fun label(sizeSp: Float) = TextView(this).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
-            setTypeface(typeface, Typeface.BOLD)
-            maxWidth = dp(220)
-            isSingleLine = true
-            ellipsize = TextUtils.TruncateAt.END
-        }
-        line1 = label(13f)
-        line2 = label(12f)
-
-        val center = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            addView(line1)
-            addView(line2)
-        }
-
-        rightIcon = ImageView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginStart = dp(10) }
-            setImageResource(R.drawable.ic_timer)
-        }
-
-        pill.addView(leftIcon)
-        pill.addView(center)
-        pill.addView(rightIcon)
-
-        root.addView(
-            pill,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER_HORIZONTAL
-            ).apply { topMargin = dp(8) }
-        )
+        island.render(model)
     }
 
     private fun buildNotification(): Notification {
@@ -284,7 +227,10 @@ class IslandService : Service() {
         instance = null
         timer?.cancel()
         handler.removeCallbacksAndMessages(null)
-        if (ready) wm.removeView(root)
+        if (ready) {
+            prefs.unregisterOnSharedPreferenceChangeListener(prefListener)
+            wm.removeView(island)
+        }
         super.onDestroy()
     }
 

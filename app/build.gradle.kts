@@ -23,3 +23,7 @@ android {
         jvmTarget = "17"
     }
 }
+
+dependencies {
+    implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
+}

@@ -38,7 +38,7 @@ class MusicListener : NotificationListenerService() {
 
     private val callback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) = loadTrack()
-        override fun onPlaybackStateChanged(state: PlaybackState?) {}
+        override fun onPlaybackStateChanged(state: PlaybackState?) = tickNow()
     }
 
     private val tick = object : Runnable {
@@ -47,7 +47,7 @@ class MusicListener : NotificationListenerService() {
             val st = c?.playbackState
             if (c != null && st != null && st.state == PlaybackState.STATE_PLAYING) {
                 val pos = st.position +
-                    ((SystemClock.elapsedRealtime() - st.lastPositionUpdateTime) * st.playbackSpeed).toLong()
+                    ((SystemClock.elapsedRealtime() - st.lastPositionUpdateTime) * st.playbackSpeed).toLong() + 250L // lirik sedikit lebih awal biar terasa sinkron
                 val text = if (lines.isEmpty()) {
                     fallback
                 } else {
@@ -57,8 +57,13 @@ class MusicListener : NotificationListenerService() {
             } else {
                 IslandService.instance?.setMusic(null, null)
             }
-            handler.postDelayed(this, 300)
+            handler.postDelayed(this, 150)
         }
+    }
+
+    private fun tickNow() {
+        handler.removeCallbacks(tick)
+        handler.post(tick)
     }
 
     override fun onListenerConnected() {
